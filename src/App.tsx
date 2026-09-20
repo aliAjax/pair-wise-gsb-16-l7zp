@@ -1,157 +1,178 @@
 import "./styles.css";
-
-const project = {
-  "id": "hxwl-01",
-  "port": 5101,
-  "title": "听力验配记录",
-  "subtitle": "门店听力师的验配档案与听力曲线工作台",
-  "stack": "React + Vite + TypeScript + CSS",
-  "theme": [
-    "#155e75",
-    "#22c55e",
-    "#f97316"
-  ],
-  "domain": "听力验配",
-  "users": [
-    "听力师",
-    "门店主管",
-    "复诊助理"
-  ],
-  "metrics": [
-    "左耳PTA",
-    "右耳PTA",
-    "言语识别率",
-    "复诊天数"
-  ],
-  "filters": [
-    "初配",
-    "复调",
-    "儿童",
-    "老人"
-  ],
-  "fields": [
-    "气导",
-    "骨导",
-    "言语识别率",
-    "助听器型号",
-    "增益调整",
-    "用户反馈"
-  ],
-  "records": [
-    [
-      "Liu-024",
-      "双耳高频下降",
-      "初配",
-      "RIC机型，2kHz后增益提高4dB"
-    ],
-    [
-      "Chen-118",
-      "单侧传导性损失",
-      "复调",
-      "低频压缩略降，反馈啸叫已消失"
-    ],
-    [
-      "Zhao-077",
-      "老人语频区下降",
-      "复诊",
-      "言语识别率从64%提升到76%"
-    ]
-  ]
-};
-
-const statusColors = ["status-ok", "status-watch", "status-danger"];
-
-function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
-  return (
-    <article className="metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <i className={statusColors[index % statusColors.length]} />
-    </article>
-  );
-}
+import { useFittingStore } from "./hooks/useFittingStore";
+import { FittingForm } from "./components/FittingForm";
+import { PendingPanel } from "./components/PendingPanel";
+import { VersionTimeline } from "./components/VersionTimeline";
+import { ConflictPanel } from "./components/ConflictPanel";
+import { EAR_LABEL, EARS } from "./domain";
+import type { Ear } from "./domain";
 
 function App() {
-  const values = project.metrics.map((metric: string, index: number) => {
-    const base = [84, 12, 31, 7][index % 4];
-    return String(base + index * 3);
-  });
+  const store = useFittingStore();
+  const {
+    state,
+    currentCustomerId,
+    currentEar,
+    currentForm,
+    notice,
+    integrityErrors,
+    pendingRecord,
+    latestConfirmed,
+    history,
+    blocked,
+    pendingConflicts,
+  } = store;
+
+  const currentCustomer = state.customers.find((c) => c.id === currentCustomerId);
+
+  const earState = (customerId: string, ear: Ear) => {
+    const recs = state.records.filter((r) => r.customerId === customerId && r.ear === ear);
+    const pending = recs.some((r) => r.status === "pending");
+    const confirmed = recs.filter((r) => r.status === "confirmed").length;
+    const draft = Boolean(state.drafts[`${customerId}::${ear}`]);
+    return { pending, confirmed, draft };
+  };
+
+  const locateConflict = (customerId: string, ear: Ear) => {
+    store.selectCustomer(customerId);
+    store.selectEar(ear);
+  };
+
+  const stats = {
+    pending: pendingConflicts.length,
+    confirmed: state.records.filter((r) => r.status === "confirmed").length,
+    drafts: Object.keys(state.drafts).length,
+    versions: state.records.length,
+  };
 
   return (
     <main className="app-shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">{project.id} · port {project.port}</p>
-          <h1>{project.title}</h1>
-          <p className="subtitle">{project.subtitle}</p>
+          <p className="eyebrow">hxwl-01 · 助听器调试闭环</p>
+          <h1>听力验配 · 增益调试工作台</h1>
+          <p className="subtitle">
+            登记左右耳增益、反馈等级与评分；不满足依据规则只能留草稿。确认后数值冻结，再次调试另建版本并保留旧值。
+          </p>
         </div>
         <div className="stack-card">
-          <span>技术栈</span>
-          <strong>{project.stack}</strong>
+          <span>闭环统计</span>
+          <div className="stat-row">
+            <strong>{stats.pending}</strong><i>等待确认</i>
+          </div>
+          <div className="stat-row">
+            <strong>{stats.confirmed}</strong><i>已冻结版本</i>
+          </div>
+          <div className="stat-row">
+            <strong>{stats.drafts}</strong><i>草稿</i>
+          </div>
+          <button type="button" className="ghost reset-btn" onClick={store.resetAll}>
+            重置演示数据
+          </button>
         </div>
       </section>
 
-      <section className="metrics-grid">
-        {project.metrics.map((metric: string, index: number) => (
-          <MetricCard key={metric} label={metric} value={values[index]} index={index} />
-        ))}
-      </section>
+      {integrityErrors.length > 0 && (
+        <div className="banner danger">
+          <b>重载一致性检查发现问题：</b>
+          <ul>{integrityErrors.map((e) => <li key={e}>{e}</li>)}</ul>
+        </div>
+      )}
+      {notice && <div className="banner info">{notice}</div>}
 
       <section className="workspace">
         <aside className="panel narrow">
-          <h2>角色</h2>
-          <div className="chips">
-            {project.users.map((user: string) => (
-              <span key={user}>{user}</span>
-            ))}
+          <h2>客户档案</h2>
+          <div className="customer-list">
+            {state.customers.map((customer) => {
+              const active = customer.id === currentCustomerId;
+              const left = earState(customer.id, "left");
+              const right = earState(customer.id, "right");
+              const hasAnyDraft = left.draft || right.draft;
+              return (
+                <button
+                  type="button"
+                  key={customer.id}
+                  className={`customer-card${active ? " active" : ""}`}
+                  onClick={() => store.selectCustomer(customer.id)}
+                >
+                  <span className="customer-code">{customer.code}</span>
+                  <strong>{customer.name}</strong>
+                  <small>{customer.note}</small>
+                  <span className="ear-dots">
+                    {EARS.map((ear) => {
+                      const s = ear === "left" ? left : right;
+                      const cls = s.pending ? "dot pending" : s.confirmed > 0 ? "dot confirmed" : "dot empty";
+                      return (
+                        <i key={ear} className={cls} title={`${EAR_LABEL[ear]} ${s.pending ? "等待确认" : s.confirmed > 0 ? `已确认 v${s.confirmed}` : "无记录"}`}>
+                          {EAR_LABEL[ear].slice(0, 1)}
+                        </i>
+                      );
+                    })}
+                    {hasAnyDraft && <em className="draft-flag">草稿</em>}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-          <h2>筛选</h2>
-          <div className="chips muted">
-            {project.filters.map((filter: string) => (
-              <button key={filter}>{filter}</button>
-            ))}
-          </div>
+          <p className="rule-note small">
+            切换客户时，未保存的草稿跟随原客户保存，不会串到其他客户。
+          </p>
         </aside>
 
-        <section className="panel">
+        <section className="panel main-panel">
           <div className="section-heading">
             <div>
-              <p>{project.domain}</p>
-              <h2>记录字段</h2>
+              <p>{currentCustomer?.code} · {currentCustomer?.note}</p>
+              <h2>{currentCustomer?.name} 的助听器调试</h2>
             </div>
-            <button className="primary-action">新增记录</button>
+            <div className="ear-tabs" role="tablist">
+              {EARS.map((ear) => {
+                const s = earState(currentCustomerId, ear);
+                return (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={currentEar === ear}
+                    key={ear}
+                    className={`ear-tab${currentEar === ear ? " active" : ""}`}
+                    onClick={() => store.selectEar(ear)}
+                  >
+                    {EAR_LABEL[ear]}
+                    {s.pending && <i className="mini-badge pending">待确认</i>}
+                    {!s.pending && s.confirmed > 0 && <i className="mini-badge confirmed">v{s.confirmed}</i>}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
+
+          {blocked && pendingRecord ? (
+            <PendingPanel
+              record={pendingRecord}
+              onConfirm={store.handleConfirm}
+              onWithdraw={store.handleWithdraw}
+            />
+          ) : (
+            <FittingForm
+              form={currentForm}
+              latestConfirmed={latestConfirmed}
+              issueMap={store.issueMap}
+              onUpdate={store.updateForm}
+              onSaveDraft={store.handleSaveDraft}
+              onRegister={store.handleRegister}
+              onDiscard={store.handleDiscardDraft}
+            />
+          )}
+
+          <div className="timeline-block">
+            <h3>{EAR_LABEL[currentEar]}版本链{latestConfirmed && <em>（当前冻结：v{latestConfirmed.version} / {latestConfirmed.gainDb} dB）</em>}</h3>
+            <VersionTimeline history={history} />
           </div>
         </section>
       </section>
 
-      <section className="records panel">
-        <div className="section-heading">
-          <div>
-            <p>示例数据</p>
-            <h2>近期记录</h2>
-          </div>
-          <button>导出摘要</button>
-        </div>
-        <div className="record-list">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")} className="record-card">
-              <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+      <ConflictPanel conflicts={pendingConflicts} onLocate={locateConflict} />
     </main>
   );
 }
